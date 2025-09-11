@@ -3,6 +3,9 @@ import os
 import re
 import json
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
 
 SENSITIVE_KEYWORDS = [
     'schema', 'table', 'column', 'database', 'structure', 'ddl', 'create',

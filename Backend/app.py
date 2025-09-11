@@ -14,6 +14,7 @@ from werkzeug.exceptions import HTTPException
 from db import run_sql_query
 from prompt_helper import get_sql_and_text_response
 from chart_generator import generate_chart
+from agent_graph import get_sql_and_human_readable_output
 
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -22,6 +23,7 @@ class CustomJSONEncoder(json.JSONEncoder):
         return super(CustomJSONEncoder, self).default(obj)
 
 app = Flask(__name__, static_url_path='', static_folder='static')
+
 
 app.json_provider_class.JSONEncoder = CustomJSONEncoder
 
@@ -125,7 +127,7 @@ def login_proxy():
         return jsonify({"error": e.response.text if e.response else "Unknown error"}), 502
 
 
-@app.route('/api/query', methods=['POST'])
+@app.route('/api/query', methods=['GET'])
 def query():
     auth_header = request.headers.get("Authorization")
     SQL_COL_Generated = ""
@@ -141,9 +143,13 @@ def query():
     if not question:
         return jsonify({"error": "Question is required."}), 400
 
-    sql = ""
+    print("the question is:- ", question)
     try:
-        sql, explanation, chart_title = get_sql_and_text_response(question)
+        sql, explanation = get_sql_and_human_readable_output(question)
+        print("the answer is:- ",explanation)
+        # return ans
+        # sql, C, chart_title = get_sql_and_text_response(question)
+        chart_title = "my chart"
 
         if sql == "SENSITIVE_QUERY_ERROR":
             return jsonify({"error": explanation}), 403
@@ -210,6 +216,73 @@ def query():
             return jsonify({"error": f"An internal server error occurred: {str(e)}"}), 500
 
 
+# @app.route('/api/query-get', methods=['GET'])
+# def query_get():
+#     """
+#     Simple GET endpoint which uses a hardcoded auth token and a hardcoded question.
+#     Call from browser: http://127.0.0.1:5000/api/query-get
+#     """
+#     AUTH_TOKEN = "Bearer KPHCoGCF2CxhF5HilKSLG6US42IB1IfFm0t1RZeG2ZR7Q4uDQcJY1v7751sI2WaaJo_2IuFkOWavASuI_p9dFsmOZieiAf4TQG9Go9Y_HZhwQYb87leHtNW6oBHrZnfilSPdpRq_fV9SOWw3FyALciz3tKmDDOw9Toa5F0YtVfv3l9DdwItS6UH1Gx8dqbRZ0SdDg93Tyc_4ymB3KI658zR6vSj5VGyARNDyj_HVbPPwO8ZObKNV2LzVwNEP-iiYgTaEHW-dcR52SlOTb57JXfbm81oetCZ29TXszm72nvG9eWcjPAP4DHEGReAmBTXDu3BMwhJibjNnqOSlf9CuWCq5hN2PgDdWjsLd4Vsk_xE"
+
+#     question = "what are my total sales"
+
+#     logger.info("query-get called (hardcoded). Question: %s", question)
+
+#     try:
+#         sql, explanation = get_sql_and_human_readable_output(question)
+
+#         if sql == "SENSITIVE_QUERY_ERROR":
+#             return jsonify({"error": explanation}), 403
+#         if sql == "SQL_PARSE_ERROR":
+#             return jsonify({"error": "The AI response was not in the correct format."}), 500
+
+#         if not sql.lower().strip().startswith("select"):
+#             return jsonify({
+#                 "text": explanation,
+#                 "table": [],
+#                 "columns": [],
+#                 "chart_url": None,
+#                 "chart_title": None
+#             }), 200
+
+#         logger.info("Executing SQL (from /api/query-get): %s", sql)
+
+#         try:
+#             column_names = extract_base_columns(sql)
+#             sql_cols_generated = ", ".join(column_names)
+#         except Exception as ex:
+#             logger.warning("Column extraction failed: %s", str(ex))
+#             sql_cols_generated = ""
+
+#         df = run_sql_query(sql)
+
+#         if df is None or df.empty:
+#             return jsonify({"error": "No record found"}), 404
+
+#         table_data = json.loads(df.to_json(orient="records", date_format="iso"))
+
+#         print("sql query generated:- ", sql)
+#         print("data after running the query:- ", table_data)
+#         print("LLM Human readable output:- ", explanation)
+#         return jsonify({
+#             "sql": sql,
+#             "table": table_data,
+#             "columns": list(df.columns),
+#             "chart_url": None,
+#             "text": explanation,
+#             "chart_title": "my chart",
+#             "sql_query_columns": sql_cols_generated
+#         }), 200
+
+#     except pyodbc.Error as db_error:
+#         logger.exception("Database error in /api/query-get")
+#         return jsonify({"error": "An error occurred while querying the database."}), 500
+
+#     except Exception as e:
+#         logger.exception("Unhandled error in /api/query-get")
+#         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
+
 @app.route('/api/chat/save', methods=['POST'])
 def save_chat_message():
     auth_header = request.headers.get("Authorization")
@@ -273,22 +346,17 @@ def serve_chart(filename):
     return send_from_directory("static/charts", filename)
 
 def extract_base_columns(sql_query):
-    # Extract all words inside square brackets (column references)
     all_bracketed = re.findall(r'\[([^\]]+)\]', sql_query, re.IGNORECASE)
     
-    # Exclude SQL keywords, table names, and aliases
     sql_keywords = {'SELECT', 'FROM', 'WHERE', 'TOP', 'ORDER BY', 'GROUP BY', 
                     'HAVING', 'JOIN', 'ON', 'AS', 'END', 'CASE', 'WHEN', 
                     'THEN', 'ELSE', 'ISNULL', 'LTRIM', 'RTRIM', 'OFFSET', 
                     'ROWS', 'FETCH', 'NEXT', 'ONLY', 'DESC', 'ASC'}
     
-    # Table name is usually after FROM or JOIN
     table_names = set(re.findall(r'(?:FROM|JOIN)\s+\[([^\]]+)\]', sql_query, re.IGNORECASE))
     
-    # Aliases are after AS [...]
     aliases = set(re.findall(r'AS\s+\[([^\]]+)\]', sql_query, re.IGNORECASE))
     
-    # Filter out keywords, table names, and aliases
     base_columns = [
         col for col in set(all_bracketed) 
         if (col.upper() not in sql_keywords and 
@@ -307,3 +375,23 @@ def handle_exception(e):
 
 if __name__ == '__main__':
     app.run(host="127.0.0.1", port=5000)
+
+
+# if __name__ == "__main__":  
+#     with app.test_request_context(
+#         "/api/query",
+#         method="POST",
+#         headers={
+#             "Authorization": "Bearer KPHCoGCF2CxhF5HilKSLG6US42IB1IfFm0t1RZeG2ZR7Q4uDQcJY1v7751sI2WaaJo_2IuFkOWavASuI_p9dFsmOZieiAf4TQG9Go9Y_HZhwQYb87leHtNW6oBHrZnfilSPdpRq_fV9SOWw3FyALciz3tKmDDOw9Toa5F0YtVfv3l9DdwItS6UH1Gx8dqbRZ0SdDg93Tyc_4ymB3KI658zR6vSj5VGyARNDyj_HVbPPwO8ZObKNV2LzVwNEP-iiYgTaEHW-dcR52SlOTb57JXfbm81oetCZ29TXszm72nvG9eWcjPAP4DHEGReAmBTXDu3BMwhJibjNnqOSlf9CuWCq5hN2PgDdWjsLd4Vsk_xE",
+#             "Content-Type": "application/json"
+#         },
+#         json={"question": "what are total sales"}
+#     ):
+#         response = query()
+#         # Flask responses can be a tuple (data, status)
+#         if isinstance(response, tuple):
+#             data, status = response
+#             print("Status:", status)
+#             print("Response:", data.get_json())
+#         else:
+#             print("Response:", response.get_json())
